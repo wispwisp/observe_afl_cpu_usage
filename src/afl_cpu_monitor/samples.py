@@ -1,7 +1,6 @@
-"""Sample dataclasses and JSON serialization."""
+"""Sample dataclasses."""
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -60,29 +59,3 @@ class Sample:
             "dropped_pids": self.dropped_pids,
             "notes": list(self.notes),
         }
-
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict(), separators=(",", ":"))
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Sample":
-        return cls(
-            schema_version=d["schema_version"],
-            timestamp_unix=d["timestamp_unix"],
-            monotonic_s=d["monotonic_s"],
-            interval_s=d["interval_s"],
-            elapsed_s=d["elapsed_s"],
-            ncpu=d["ncpu"],
-            roots=tuple(RootSample(**r) for r in d["roots"]),
-            process_count=d["process_count"],
-            aggregate_cpu_percent=d["aggregate_cpu_percent"],
-            normalized_cpu_percent=d["normalized_cpu_percent"],
-            top_processes=tuple(ProcSample(**p) for p in d["top_processes"]),
-            sampling_overhead_ms=d["sampling_overhead_ms"],
-            dropped_pids=d["dropped_pids"],
-            notes=tuple(d.get("notes", [])),
-        )
-
-    @classmethod
-    def from_json(cls, line: str) -> "Sample":
-        return cls.from_dict(json.loads(line))

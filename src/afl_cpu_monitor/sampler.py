@@ -1,21 +1,23 @@
-"""Tree-walking CPU sampler built on psutil + /proc."""
+"""psutil-based CPU sampler for one or more process trees."""
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Iterable
 
 import psutil
 
-from .proc import (
-    build_children_map,
-    descendants,
-    num_cpus,
-    read_pid_ppid_map,
-)
 from .samples import ProcSample, RootSample, SCHEMA_VERSION, Sample
 
 log = logging.getLogger(__name__)
+
+
+def _num_cpus() -> int:
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return max(1, os.cpu_count() or 1)
 
 
 class PsutilTreeSampler:
@@ -25,8 +27,8 @@ class PsutilTreeSampler:
 
     A per-PID cache of psutil.Process is kept across ticks because
     cpu_percent(interval=None) is computed against the previous call on
-    the same instance. New PIDs are primed on the tick they're first seen
-    and contribute 0 % on that tick (psutil semantics).
+    the same instance. The cache is keyed by pid with create_time()
+    verified on each hit so PID reuse cannot poison a reading.
     """
 
     def __init__(self, root_pids: Iterable[int]) -> None:
@@ -34,8 +36,7 @@ class PsutilTreeSampler:
         if not deduped:
             raise ValueError("root_pids must be non-empty")
         self._root_pids: list[int] = deduped
-        self._cache: dict[int, psutil.Process] = {}
-        self._create_times: dict[int, float] = {}
+        self._cache: dict[int, tuple[psutil.Process, float]] = {}
         self._last_monotonic: float | None = None
         self._attached = False
 
@@ -51,34 +52,34 @@ class PsutilTreeSampler:
 
     def detach(self) -> None:
         self._cache.clear()
-        self._create_times.clear()
         self._last_monotonic = None
         self._attached = False
 
     def _get_or_prime(self, pid: int) -> psutil.Process | None:
         cached = self._cache.get(pid)
         if cached is not None:
+            proc, ct = cached
             try:
-                if cached.create_time() == self._create_times.get(pid):
-                    return cached
+                if proc.create_time() == ct:
+                    return proc
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
             self._cache.pop(pid, None)
-            self._create_times.pop(pid, None)
         try:
             proc = psutil.Process(pid)
             ct = proc.create_time()
             proc.cpu_percent(interval=None)
-            self._cache[pid] = proc
-            self._create_times[pid] = ct
+            self._cache[pid] = (proc, ct)
             return proc
-        except (
-            psutil.NoSuchProcess,
-            psutil.AccessDenied,
-            psutil.ZombieProcess,
-            ProcessLookupError,
-        ):
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             return None
+
+    @staticmethod
+    def _is_alive(proc: psutil.Process) -> bool:
+        try:
+            return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return False
 
     def sample(self, *, interval_s: float, top_n: int) -> Sample:
         if not self._attached:
@@ -87,35 +88,40 @@ class PsutilTreeSampler:
         wall_now = time.time()
         elapsed = t0 - (self._last_monotonic if self._last_monotonic is not None else t0)
         self._last_monotonic = t0
+        ncpu = _num_cpus()
 
-        ppid_map = read_pid_ppid_map()
-        children = build_children_map(ppid_map)
-        ncpu = num_cpus()
-
-        per_root_pids: dict[int, set[int]] = {}
+        per_root_descendants: dict[int, list[int]] = {}
+        live_root_pids: set[int] = set()
         all_pids: set[int] = set()
-        for root in self._root_pids:
-            root_alive = root in ppid_map
-            desc = descendants(root, children) if root_alive else set()
-            per_root_pids[root] = desc
-            if root_alive:
-                all_pids.add(root)
-                all_pids.update(desc)
+
+        for root_pid in self._root_pids:
+            root_proc = self._get_or_prime(root_pid)
+            if root_proc is None or not self._is_alive(root_proc):
+                per_root_descendants[root_pid] = []
+                continue
+            try:
+                desc_pids = [d.pid for d in root_proc.children(recursive=True)]
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                per_root_descendants[root_pid] = []
+                continue
+            live_root_pids.add(root_pid)
+            per_root_descendants[root_pid] = desc_pids
+            all_pids.add(root_pid)
+            all_pids.update(desc_pids)
 
         for pid in list(self._cache.keys()):
             if pid not in all_pids and pid not in self._root_pids:
                 self._cache.pop(pid, None)
-                self._create_times.pop(pid, None)
 
         proc_samples: dict[int, ProcSample] = {}
         cpu_by_pid: dict[int, float] = {}
         dropped = 0
         for pid in all_pids:
+            proc = self._get_or_prime(pid)
+            if proc is None:
+                dropped += 1
+                continue
             try:
-                proc = self._get_or_prime(pid)
-                if proc is None:
-                    dropped += 1
-                    continue
                 with proc.oneshot():
                     cpu_pct = proc.cpu_percent(interval=None)
                     times = proc.cpu_times()
@@ -123,7 +129,7 @@ class PsutilTreeSampler:
                     try:
                         ppid = proc.ppid()
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        ppid = ppid_map.get(pid, 0)
+                        ppid = 0
                 cpu_by_pid[pid] = float(cpu_pct)
                 proc_samples[pid] = ProcSample(
                     pid=pid,
@@ -142,29 +148,20 @@ class PsutilTreeSampler:
                 dropped += 1
 
         roots: list[RootSample] = []
-        for root in self._root_pids:
-            root_alive = root in ppid_map
-            desc = per_root_pids[root]
-            if root_alive:
-                pids = desc | {root}
+        for root_pid in self._root_pids:
+            if root_pid in live_root_pids:
+                desc_pids = per_root_descendants[root_pid]
+                pids = {root_pid, *desc_pids}
                 agg = sum(cpu_by_pid.get(p, 0.0) for p in pids)
+                roots.append(RootSample(root_pid, True, len(desc_pids), agg))
             else:
-                agg = 0.0
-            roots.append(
-                RootSample(
-                    root_pid=root,
-                    root_alive=root_alive,
-                    descendant_count=len(desc),
-                    aggregate_cpu_percent=agg,
-                )
-            )
+                roots.append(RootSample(root_pid, False, 0, 0.0))
 
         aggregate = sum(cpu_by_pid.values())
         normalized = aggregate / max(1, ncpu)
         top = tuple(
             sorted(proc_samples.values(), key=lambda p: p.cpu_percent, reverse=True)[:top_n]
         )
-
         return Sample(
             schema_version=SCHEMA_VERSION,
             timestamp_unix=wall_now,

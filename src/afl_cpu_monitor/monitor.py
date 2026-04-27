@@ -1,27 +1,25 @@
-"""CpuTreeMonitor — lifecycle, threading, and sink fanout."""
+"""CpuTreeMonitor — lifecycle, threading, and callback dispatch."""
 from __future__ import annotations
 
 import logging
 import threading
 import time
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .sampler import PsutilTreeSampler
 from .samples import Sample
-from .sinks.base import Sink
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_LOGGER = log
-_MAX_SINK_FAILURES = 3
+SampleCallback = Callable[[Sample], None]
 
 
 class CpuTreeMonitor:
     """Periodically samples the CPU usage of one or more process trees and
-    fans each Sample out to registered sinks.
+    delivers each Sample to a single callback.
 
-    The monitor never installs signal handlers — the calling runner owns
-    SIGINT/SIGTERM and is expected to call .stop() to drive shutdown.
+    The library installs no signal handlers — the caller owns SIGINT/SIGTERM
+    and is expected to call .stop() to drive shutdown.
 
     After .stop() the monitor may be restarted with .start() (a fresh
     psutil cache is built).
@@ -30,8 +28,8 @@ class CpuTreeMonitor:
     def __init__(
         self,
         root_pids: int | Iterable[int],
+        on_sample: SampleCallback,
         *,
-        sinks: Iterable[Sink] = (),
         interval_s: float = 1.0,
         top_n: int = 10,
         stop_when_all_roots_exit: bool = True,
@@ -44,16 +42,13 @@ class CpuTreeMonitor:
         else:
             roots = root_pids
         self._sampler = PsutilTreeSampler(roots)
-        self._sinks: list[Sink] = list(sinks)
-        self._sink_failures: dict[int, int] = {}
-        self._disabled_sinks: set[int] = set()
-        # psutil.cpu_percent is documented to be unreliable below ~0.1s.
+        self._on_sample = on_sample
         self._interval_s = max(0.1, float(interval_s))
         self._top_n = int(top_n)
         self._stop_when_all_roots_exit = bool(stop_when_all_roots_exit)
         self._grace_after_exit_s = max(0.0, float(grace_after_exit_s))
         self._thread_name = thread_name
-        self._log = logger or _DEFAULT_LOGGER
+        self._log = logger or log
 
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -69,19 +64,6 @@ class CpuTreeMonitor:
     def last_sample(self) -> Sample | None:
         return self._last_sample
 
-    def add_sink(self, sink: Sink) -> None:
-        with self._lock:
-            self._sinks.append(sink)
-
-    def remove_sink(self, sink: Sink) -> None:
-        with self._lock:
-            try:
-                self._sinks.remove(sink)
-            except ValueError:
-                pass
-            self._disabled_sinks.discard(id(sink))
-            self._sink_failures.pop(id(sink), None)
-
     def start(self) -> None:
         with self._lock:
             if self.is_running:
@@ -96,13 +78,13 @@ class CpuTreeMonitor:
     def stop(self, timeout: float = 5.0) -> None:
         with self._lock:
             if not self.is_running:
-                self._cleanup_sinks_and_sampler()
+                self._sampler.detach()
                 return
             self._stop_event.set()
             t = self._thread
         if t is not None:
             t.join(timeout=timeout)
-        self._cleanup_sinks_and_sampler()
+        self._sampler.detach()
 
     def join(self, timeout: float | None = None) -> None:
         t = self._thread
@@ -115,44 +97,6 @@ class CpuTreeMonitor:
 
     def __exit__(self, *exc) -> None:
         self.stop()
-
-    def _cleanup_sinks_and_sampler(self) -> None:
-        with self._lock:
-            for sink in self._sinks:
-                try:
-                    sink.flush()
-                except Exception:
-                    self._log.exception("sink %r flush failed", type(sink).__name__)
-                try:
-                    sink.close()
-                except Exception:
-                    self._log.exception("sink %r close failed", type(sink).__name__)
-            self._sampler.detach()
-
-    def _dispatch(self, sample: Sample) -> None:
-        with self._lock:
-            sinks = list(self._sinks)
-            disabled = set(self._disabled_sinks)
-        for sink in sinks:
-            sid = id(sink)
-            if sid in disabled:
-                continue
-            try:
-                sink.handle(sample)
-                self._sink_failures[sid] = 0
-            except Exception:
-                self._log.exception(
-                    "sink %r raised; isolating", type(sink).__name__,
-                )
-                fails = self._sink_failures.get(sid, 0) + 1
-                self._sink_failures[sid] = fails
-                if fails >= _MAX_SINK_FAILURES:
-                    self._log.error(
-                        "sink %r disabled after %d consecutive failures",
-                        type(sink).__name__, fails,
-                    )
-                    with self._lock:
-                        self._disabled_sinks.add(sid)
 
     def _run(self) -> None:
         loop_start = time.monotonic()
@@ -175,7 +119,10 @@ class CpuTreeMonitor:
                     continue
 
                 self._last_sample = sample
-                self._dispatch(sample)
+                try:
+                    self._on_sample(sample)
+                except Exception:
+                    self._log.exception("on_sample callback raised; continuing")
 
                 lag = time.monotonic() - tick_target
                 if lag > 2 * self._interval_s:

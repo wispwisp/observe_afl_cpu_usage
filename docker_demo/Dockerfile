@@ -32,8 +32,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir psutil watchdog \
- && pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e .
 
 COPY --from=afl-build /work/target/target /opt/app/target/target
 COPY docker_demo/seeds/        /opt/app/seeds/

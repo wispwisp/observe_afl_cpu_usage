@@ -2,8 +2,8 @@
 
 CPU usage monitor for AFL++ fuzzing process trees. Given the PID of an
 AFL++ master process, it samples CPU usage of that process and every
-descendant it spawns, emits one `Sample` per tick, and fans samples out
-to pluggable sinks.
+descendant it spawns, emits one `Sample` per tick, and delivers each
+sample to an `on_sample` callback.
 
 ## Install
 
@@ -11,14 +11,20 @@ to pluggable sinks.
 pip install -e .
 ```
 
-Requires Python 3.10+, Linux (uses `/proc`), and `psutil` + `watchdog`.
+Requires Python 3.10+, Linux (uses `/proc` via `psutil`), and `psutil`.
 
 ## Quick start
 
 ```python
 import logging
 import subprocess
-from afl_cpu_monitor import CpuTreeMonitor, JsonlFileSink, LoggingSink
+from afl_cpu_monitor import CpuTreeMonitor, Sample
+
+def emit_to_otel(sample: Sample) -> None:
+    # Replace with a real OpenTelemetry meter / exporter in production.
+    logging.getLogger("otel").info(
+        "agg=%.1f%% procs=%d", sample.aggregate_cpu_percent, sample.process_count,
+    )
 
 afl = subprocess.Popen(
     ["afl-fuzz", "-i", "in", "-o", "out", "--", "./target"],
@@ -27,10 +33,7 @@ afl = subprocess.Popen(
 
 with CpuTreeMonitor(
     root_pids=[afl.pid],
-    sinks=[
-        JsonlFileSink("cpu.jsonl"),
-        LoggingSink(logging.getLogger("cpu")),
-    ],
+    on_sample=emit_to_otel,
     interval_s=1.0,
     top_n=10,
 ) as monitor:
@@ -39,32 +42,11 @@ with CpuTreeMonitor(
 
 `root_pids` accepts a single int or a list of ints (parallel `-M`/`-S`).
 
-## Watchdog integration (the headline)
-
-If you already run a `watchdog.observers.Observer` over your output
-directory, register a `CpuSampleEventHandler` subclass on it and override
-`on_cpu_sample`:
-
-```python
-from watchdog.observers import Observer
-from afl_cpu_monitor import CpuSampleEventHandler, Sample
-
-class MyHandler(CpuSampleEventHandler):
-    def on_cpu_sample(self, sample: Sample) -> None:
-        my_event_bus.publish("cpu.sample", sample.to_dict())
-
-observer = Observer()
-observer.schedule(MyHandler("out/cpu.jsonl"), "out", recursive=False)
-observer.start()
-```
-
-The handler tails the JSONL file by byte offset, so you never re-process
-a line and partial mid-flush writes are buffered until newline.
-
 ## Sample schema
 
 `Sample.schema_version == 1`. See `src/afl_cpu_monitor/samples.py` for
-the dataclass; `to_json()` / `from_json()` round-trip JSONL lines.
+the dataclass; `Sample.to_dict()` returns a plain dict suitable for use
+as OpenTelemetry attributes.
 
 ## Demo (Docker)
 
@@ -74,9 +56,9 @@ docker run --rm -it -v "$PWD/out:/out" afl-cpu-monitor-demo
 ```
 
 Inside the container `runner.py` launches AFL++ against a crashing
-C++ target (`docker_demo/target/target.cc`), attaches the monitor,
-and writes samples to `/out/cpu.jsonl` while the watchdog handler
-prints them in real time.
+C++ target (`docker_demo/target/target.cc`), attaches the monitor, and
+prints one `[otel] …` line per second standing in for a real OTel
+exporter call.
 
 ## Limitations
 
@@ -86,5 +68,5 @@ mode spawns extremely short-lived target processes, so the reported
 aggregate may underestimate actual CPU. Persistent mode (AFL's
 `AFL_LOOP_TIME` / `__AFL_LOOP`) avoids this. A cgroup v2 backend that
 captures cumulative CPU including dead children is on the roadmap; the
-`Sampler` interface is kept clean so it slots in behind the same
+sampler interface is kept clean so it slots in behind the same
 `CpuTreeMonitor` API.

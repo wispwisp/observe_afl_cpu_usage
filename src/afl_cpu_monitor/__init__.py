@@ -1,15 +1,7 @@
 """afl-cpu-monitor — CPU usage monitor for AFL++ fuzzing process trees."""
-from .monitor import CpuTreeMonitor
-from .samples import ProcSample, RootSample, SCHEMA_VERSION, Sample
+from .monitor import CpuTreeMonitor, SampleCallback
 from .sampler import PsutilTreeSampler
-from .sinks import (
-    CallbackSink,
-    CpuSampleEventHandler,
-    JsonlFileSink,
-    LoggingSink,
-    MultiSink,
-    Sink,
-)
+from .samples import ProcSample, RootSample, SCHEMA_VERSION, Sample
 
 __version__ = "0.1.0"
 
@@ -18,13 +10,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "CpuTreeMonitor",
     "PsutilTreeSampler",
-    "Sample",
-    "RootSample",
     "ProcSample",
-    "Sink",
-    "MultiSink",
-    "CallbackSink",
-    "JsonlFileSink",
-    "LoggingSink",
-    "CpuSampleEventHandler",
+    "RootSample",
+    "Sample",
+    "SampleCallback",
 ]
