@@ -57,7 +57,8 @@ class CpuTreeMonitor:
 
     @property
     def is_running(self) -> bool:
-        t = self._thread
+        with self._lock:
+            t = self._thread
         return t is not None and t.is_alive()
 
     @property
@@ -84,6 +85,13 @@ class CpuTreeMonitor:
             t = self._thread
         if t is not None:
             t.join(timeout=timeout)
+            if t.is_alive():
+                self._log.warning(
+                    "monitor thread did not stop within %.1fs; "
+                    "skipping detach to avoid racing the worker",
+                    timeout,
+                )
+                return
         self._sampler.detach()
 
     def join(self, timeout: float | None = None) -> None:
@@ -118,6 +126,7 @@ class CpuTreeMonitor:
                     self._log.exception("sampler raised; continuing")
                     continue
 
+                # Cross-thread store: atomic on CPython under the GIL.
                 self._last_sample = sample
                 try:
                     self._on_sample(sample)
@@ -131,18 +140,19 @@ class CpuTreeMonitor:
                         n, lag, self._interval_s,
                     )
 
-                any_root_alive = any(r.root_alive for r in sample.roots)
-                if self._stop_when_all_roots_exit and not any_root_alive:
-                    if grace_start is None:
-                        grace_start = time.monotonic()
-                        self._log.info(
-                            "all roots exited; entering %.1fs grace period",
-                            self._grace_after_exit_s,
-                        )
-                    elif time.monotonic() - grace_start >= self._grace_after_exit_s:
-                        self._log.info("grace period ended; stopping monitor")
-                        break
-                else:
-                    grace_start = None
+                if self._stop_when_all_roots_exit:
+                    any_root_alive = any(r.root_alive for r in sample.roots)
+                    if not any_root_alive:
+                        if grace_start is None:
+                            grace_start = time.monotonic()
+                            self._log.info(
+                                "all roots exited; entering %.1fs grace period",
+                                self._grace_after_exit_s,
+                            )
+                        elif time.monotonic() - grace_start >= self._grace_after_exit_s:
+                            self._log.info("grace period ended; stopping monitor")
+                            break
+                    else:
+                        grace_start = None
         except Exception:
             self._log.exception("monitor loop crashed")

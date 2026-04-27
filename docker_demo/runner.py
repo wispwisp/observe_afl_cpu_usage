@@ -68,6 +68,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     findings = out / "findings"
     if findings.exists():
+        log.info("removing existing findings dir: %s", findings)
         shutil.rmtree(findings)
 
     afl_cmd = [
@@ -126,7 +127,7 @@ def main() -> int:
     finally:
         monitor.stop(timeout=5.0)
         log.info("done; afl rc=%s", rc)
-    return rc if rc is not None else 0
+    return rc
 
 
 if __name__ == "__main__":

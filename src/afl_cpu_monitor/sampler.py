@@ -29,6 +29,14 @@ class PsutilTreeSampler:
     cpu_percent(interval=None) is computed against the previous call on
     the same instance. The cache is keyed by pid with create_time()
     verified on each hit so PID reuse cannot poison a reading.
+
+    First-sample caveat: psutil.Process.cpu_percent(interval=None)
+    returns 0.0 on its priming call. attach() primes only the root
+    PIDs, so on the first sample() any descendant encountered for the
+    first time is being primed and reads 0%. Aggregations that span
+    the very first tick will therefore underreport CPU. From the
+    second tick onward, every PID seen for at least one full tick
+    interval reports a real delta.
     """
 
     def __init__(self, root_pids: Iterable[int]) -> None:
@@ -39,6 +47,7 @@ class PsutilTreeSampler:
         self._cache: dict[int, tuple[psutil.Process, float]] = {}
         self._last_monotonic: float | None = None
         self._attached = False
+        self._ncpu = _num_cpus()
 
     @property
     def root_pids(self) -> list[int]:
@@ -88,7 +97,7 @@ class PsutilTreeSampler:
         wall_now = time.time()
         elapsed = t0 - (self._last_monotonic if self._last_monotonic is not None else t0)
         self._last_monotonic = t0
-        ncpu = _num_cpus()
+        ncpu = self._ncpu
 
         per_root_descendants: dict[int, list[int]] = {}
         live_root_pids: set[int] = set()
@@ -110,7 +119,7 @@ class PsutilTreeSampler:
             all_pids.update(desc_pids)
 
         for pid in list(self._cache.keys()):
-            if pid not in all_pids and pid not in self._root_pids:
+            if pid not in all_pids and pid not in live_root_pids:
                 self._cache.pop(pid, None)
 
         proc_samples: dict[int, ProcSample] = {}
