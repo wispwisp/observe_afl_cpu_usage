@@ -34,7 +34,7 @@ class CpuTreeMonitor:
         top_n: int = 10,
         stop_when_all_roots_exit: bool = True,
         grace_after_exit_s: float = 2.0,
-        thread_name: str = "afl-cpu-monitor",
+        thread_name: str = "cpu-process-tree-monitor",
         logger: logging.Logger | None = None,
     ) -> None:
         if isinstance(root_pids, int):

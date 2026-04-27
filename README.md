@@ -1,9 +1,9 @@
-# afl-cpu-monitor
+# cpu-process-tree-monitor
 
-CPU usage monitor for AFL++ fuzzing process trees. Given the PID of an
-AFL++ master process, it samples CPU usage of that process and every
-descendant it spawns, emits one `Sample` per tick, and delivers each
-sample to an `on_sample` callback.
+CPU usage monitor for a process tree given root PIDs. Originally built
+to watch AFL++ fuzzing trees, but works for any subprocess tree. Each
+tick the monitor produces one `Sample` and delivers it to a single
+`on_sample` callback.
 
 ## Install
 
@@ -18,7 +18,7 @@ Requires Python 3.10+, Linux (uses `/proc` via `psutil`), and `psutil`.
 ```python
 import logging
 import subprocess
-from afl_cpu_monitor import CpuTreeMonitor, Sample
+from cpu_process_tree_monitor import CpuTreeMonitor, Sample
 
 def emit_to_otel(sample: Sample) -> None:
     # Replace with a real OpenTelemetry meter / exporter in production.
@@ -44,7 +44,7 @@ with CpuTreeMonitor(
 
 ## Sample schema
 
-`Sample.schema_version == 1`. See `src/afl_cpu_monitor/samples.py` for
+`Sample.schema_version == 1`. See `src/cpu_process_tree_monitor/samples.py` for
 the pydantic model; `Sample.model_dump()` returns a plain dict suitable
 for use as OpenTelemetry attributes, and `Sample.model_dump_json()` /
 `Sample.model_json_schema()` are also available.
@@ -52,8 +52,8 @@ for use as OpenTelemetry attributes, and `Sample.model_dump_json()` /
 ## Demo (Docker)
 
 ```
-docker build -t afl-cpu-monitor-demo -f docker_demo/Dockerfile .
-docker run --rm -it -v "$PWD/out:/out" afl-cpu-monitor-demo
+docker build -t cpu-process-tree-monitor-demo -f docker_demo/Dockerfile .
+docker run --rm -it -v "$PWD/out:/out" cpu-process-tree-monitor-demo
 ```
 
 Inside the container `runner.py` launches AFL++ against a crashing

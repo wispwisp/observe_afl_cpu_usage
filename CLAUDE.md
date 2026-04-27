@@ -1,4 +1,4 @@
-# afl-cpu-monitor — project memory for future Claude sessions
+# cpu-process-tree-monitor — project memory for future Claude sessions
 
 ## What this project is
 
@@ -70,7 +70,7 @@ includes CPU time of children that have already exited.
 ## File layout
 
 ```
-src/afl_cpu_monitor/
+src/cpu_process_tree_monitor/
   __init__.py      public re-exports
   monitor.py       CpuTreeMonitor (lifecycle, thread, callback dispatch)
   sampler.py       PsutilTreeSampler (psutil-based, the only backend)
@@ -85,8 +85,8 @@ There is intentionally no `tests/` directory and no `proc.py` /
 ## How to run the demo
 
 ```
-docker build -t afl-cpu-monitor-demo -f docker_demo/Dockerfile .
-docker run --rm -it -v "$PWD/out:/out" afl-cpu-monitor-demo
+docker build -t cpu-process-tree-monitor-demo -f docker_demo/Dockerfile .
+docker run --rm -it -v "$PWD/out:/out" cpu-process-tree-monitor-demo
 ```
 
 Expect: log lines from `emit_to_otel` showing non-zero aggregate CPU
@@ -109,4 +109,4 @@ and top processes including `afl-fuzz` and `target`. AFL discovers the
   schema if/when fields are added; bump it if the dataclass shape
   changes.
 - Public surface = what's re-exported from
-  `src/afl_cpu_monitor/__init__.py`. Everything else is internal.
+  `src/cpu_process_tree_monitor/__init__.py`. Everything else is internal.

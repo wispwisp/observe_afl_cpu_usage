@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from afl_cpu_monitor import CpuTreeMonitor, Sample
+from cpu_process_tree_monitor import CpuTreeMonitor, Sample
 
 
 def emit_to_otel(sample: Sample) -> None:

@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1.6
 #
-# afl-cpu-monitor smoke-test image. Runs AFL++ against a deliberately
+# cpu-process-tree-monitor smoke-test image. Runs AFL++ against a deliberately
 # crashing C++ target while the Python CPU tree monitor watches AFL's
 # pid tree. Outputs one JSONL sample per second to /out/cpu.jsonl.
 #
 # Build (from repo root, NOT from docker_demo/):
-#   docker build -t afl-cpu-monitor-demo -f docker_demo/Dockerfile .
+#   docker build -t cpu-process-tree-monitor-demo -f docker_demo/Dockerfile .
 #
 # Run:
-#   docker run --rm -it -v "$PWD/out:/out" afl-cpu-monitor-demo
+#   docker run --rm -it -v "$PWD/out:/out" cpu-process-tree-monitor-demo
 #
 
 FROM aflplusplus/aflplusplus:v4.21c AS afl-build

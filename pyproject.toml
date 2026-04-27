@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "afl-cpu-monitor"
+name = "cpu-process-tree-monitor"
 version = "0.1.0"
-description = "CPU usage monitor for AFL++ fuzzing process trees"
+description = "CPU usage monitor for a process tree given root PIDs"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

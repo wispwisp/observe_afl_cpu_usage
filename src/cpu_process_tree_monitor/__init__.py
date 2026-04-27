@@ -1,4 +1,4 @@
-"""afl-cpu-monitor — CPU usage monitor for AFL++ fuzzing process trees."""
+"""cpu-process-tree-monitor — CPU usage monitor for a process tree given root PIDs."""
 from .monitor import CpuTreeMonitor, SampleCallback
 from .sampler import PsutilTreeSampler
 from .samples import ProcSample, RootSample, SCHEMA_VERSION, Sample
