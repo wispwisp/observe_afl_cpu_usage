@@ -153,9 +153,19 @@ class PsutilTreeSampler:
                 desc_pids = per_root_descendants[root_pid]
                 pids = {root_pid, *desc_pids}
                 agg = sum(cpu_by_pid.get(p, 0.0) for p in pids)
-                roots.append(RootSample(root_pid, True, len(desc_pids), agg))
+                roots.append(RootSample(
+                    root_pid=root_pid,
+                    root_alive=True,
+                    descendant_count=len(desc_pids),
+                    aggregate_cpu_percent=agg,
+                ))
             else:
-                roots.append(RootSample(root_pid, False, 0, 0.0))
+                roots.append(RootSample(
+                    root_pid=root_pid,
+                    root_alive=False,
+                    descendant_count=0,
+                    aggregate_cpu_percent=0.0,
+                ))
 
         aggregate = sum(cpu_by_pid.values())
         normalized = aggregate / max(1, ncpu)

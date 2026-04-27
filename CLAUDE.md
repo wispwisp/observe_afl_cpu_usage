@@ -74,7 +74,7 @@ src/afl_cpu_monitor/
   __init__.py      public re-exports
   monitor.py       CpuTreeMonitor (lifecycle, thread, callback dispatch)
   sampler.py       PsutilTreeSampler (psutil-based, the only backend)
-  samples.py       Sample / RootSample / ProcSample dataclasses + to_dict
+  samples.py       Sample / RootSample / ProcSample pydantic models
 
 docker_demo/       Dockerfile + crashing C++ target + runner.py smoke test
 ```

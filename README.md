@@ -45,8 +45,9 @@ with CpuTreeMonitor(
 ## Sample schema
 
 `Sample.schema_version == 1`. See `src/afl_cpu_monitor/samples.py` for
-the dataclass; `Sample.to_dict()` returns a plain dict suitable for use
-as OpenTelemetry attributes.
+the pydantic model; `Sample.model_dump()` returns a plain dict suitable
+for use as OpenTelemetry attributes, and `Sample.model_dump_json()` /
+`Sample.model_json_schema()` are also available.
 
 ## Demo (Docker)
 
