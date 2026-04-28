@@ -53,7 +53,7 @@ OpenTelemetry attributes, and `Sample.model_dump_json()` /
 
 ```
 docker build -t cpu-process-tree-monitor-demo -f docker_demo/Dockerfile .
-docker run --rm -it -v "$PWD/out:/out" cpu-process-tree-monitor-demo
+docker run --rm -it -v cpu-process-tree-monitor-demo
 ```
 
 Inside the container `runner.py` launches AFL++ against a crashing
