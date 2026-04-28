@@ -28,6 +28,10 @@ class PsutilTreeSampler:
         if not deduped:
             raise ValueError("root_pids must be non-empty")
         self._root_pids: list[int] = deduped
+        # Why _cache: psutil.Process.cpu_percent(interval=None) is delta-based.
+        # It returns (cpu_time_now − cpu_time_at_previous_call) / wall_elapsed computed
+        # against the previous call on the same psutil.Process instance. The first call
+        # on any fresh instance has no "previous" — it always returns 0.0.
         self._cache: dict[int, psutil.Process] = {}
         self._ncpu = psutil.cpu_count() or 1
         # Prime each root at construction time. cpu_percent(interval=None)
@@ -67,21 +71,23 @@ class PsutilTreeSampler:
         # full recursive descendant list; psutil performs the /proc
         # walk internally so we don't hand-roll one. A root that is
         # dead, gone, or inaccessible contributes an empty descendant
-        # list and is excluded from all_pids - its RootSample later in
-        # this tick will report root_alive=False with a zero
-        # aggregate. The per_root_descendants mapping is kept so we
-        # can later compute sub-aggregates without re-walking the tree.
+        # list - its RootSample later in this tick will report
+        # root_alive=False with a zero aggregate (Phase 2 fails to
+        # read its cpu_percent and silently drops it). The
+        # per_root_descendants mapping is kept so we can later compute
+        # sub-aggregates without re-walking the tree.
         per_root_descendants: dict[int, list[int]] = {}
         all_pids: set[int] = set()
         for root_pid in self._root_pids:
             proc = self._prime(root_pid)
-            if proc is None or not proc.is_running():
-                per_root_descendants[root_pid] = []
-                continue
-            try:
-                desc = [d.pid for d in proc.children(recursive=True)]
-            except psutil.Error:
-                desc = []
+            desc: list[int] = []
+            if proc is not None:
+                try:
+                    # children(recursive=True) walks the tree at the moment you call it.
+                    # Short-lived grandchildren that fork and exit between samples will be missed.
+                    desc = [d.pid for d in proc.children(recursive=True)]
+                except psutil.Error:
+                    pass
             per_root_descendants[root_pid] = desc
             all_pids.add(root_pid)
             all_pids.update(desc)
@@ -112,9 +118,7 @@ class PsutilTreeSampler:
         # binaries continuously. We retain entries that are still part
         # of any tree this tick and evict everything else; an evicted
         # PID that reappears later will be re-primed on the next tick.
-        for pid in list(self._cache):
-            if pid not in all_pids:
-                del self._cache[pid]
+        self._cache = {pid: proc for pid, proc in self._cache.items() if pid in all_pids}
 
         # Phase 4 - per-root sub-aggregates. For each root, sum the
         # CPU of every (root + descendant) PID that produced a sample
@@ -123,19 +127,19 @@ class PsutilTreeSampler:
         # root yields root_alive=False, but its surviving descendants
         # still contribute to aggregate_cpu_percent so the caller can
         # see leftover work in the tree even after the root exits.
-        roots: list[RootSample] = []
-        for root_pid, desc in per_root_descendants.items():
-            agg = sum(
-                proc_samples[p].cpu_percent
-                for p in (root_pid, *desc)
-                if p in proc_samples
-            )
-            roots.append(RootSample(
+        roots = tuple(
+            RootSample(
                 root_pid=root_pid,
                 root_alive=root_pid in proc_samples,
                 descendant_count=len(desc),
-                aggregate_cpu_percent=agg,
-            ))
+                aggregate_cpu_percent=sum(
+                    proc_samples[p].cpu_percent
+                    for p in (root_pid, *desc)
+                    if p in proc_samples
+                ),
+            )
+            for root_pid, desc in per_root_descendants.items()
+        )
 
         # Phase 5 - cross-tree aggregates and the top-N hottest
         # processes. normalized_cpu_percent divides the raw aggregate
@@ -152,7 +156,7 @@ class PsutilTreeSampler:
             timestamp_unix=wall_now,
             interval_s=interval_s,
             ncpu=self._ncpu,
-            roots=tuple(roots),
+            roots=roots,
             process_count=len(proc_samples),
             aggregate_cpu_percent=aggregate,
             normalized_cpu_percent=aggregate / self._ncpu,
