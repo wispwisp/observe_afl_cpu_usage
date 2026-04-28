@@ -19,7 +19,10 @@ spawns, then later asked for a simplification pass that removed
 JSONL-on-disk + watchdog tailing and a `Sink` Protocol (originally the
 headline integration) in favour of a single `on_sample` callback —
 because the real downstream is OpenTelemetry and a callback is the
-cleanest place to plug a meter / exporter in.
+cleanest place to plug a meter / exporter in. A second simplification
+pass cut the sampler/monitor down to the minimum needed to feed AFL
+samples into the callback (no PID-reuse defense, no zombie/auto-stop
+logic, no drift-corrected scheduling, no schema_version).
 
 ## Design choices (frozen)
 
@@ -45,17 +48,14 @@ cleanest place to plug a meter / exporter in.
   alerts are explicitly out of scope.
 - **The library installs no signal handlers**. The runner owns
   SIGINT/SIGTERM and calls `monitor.stop()`.
-- **Lifecycle**: a single daemon `threading.Thread` driven by a
-  `threading.Event` stop flag. Drift-corrected scheduling against
-  `time.monotonic()`. Stops automatically when *all* roots exit
-  (configurable via `stop_when_all_roots_exit`, with
-  `grace_after_exit_s` tail). Restart after `stop()` is supported.
-- **PID reuse defense**: psutil cache keyed by pid, but `create_time()`
-  is verified on every cache hit; mismatched create-times trigger
-  eviction and a fresh `psutil.Process` instance.
-- **Zombie handling**: a root whose `proc.status() == STATUS_ZOMBIE` is
-  treated as not-alive, so its tree contributes nothing to the
-  aggregate and the auto-stop logic can fire.
+- **Lifecycle**: a single daemon `threading.Thread` runs a private
+  `schedule.Scheduler()` instance ticking the sampler every
+  `interval_s`. `stop()` sets a `threading.Event` and joins the thread.
+  No auto-stop on root exit — the runner watches its own subprocess
+  and calls `monitor.stop()`. Restart after `stop()` is supported.
+- **No PID-reuse defense and no explicit zombie check**. The cache is
+  keyed by pid, and a dead or zombie root just produces a zero
+  `RootSample`. Both checks were dropped in the simplification pass.
 
 ## Known limitation (documented, not a bug)
 
@@ -72,7 +72,7 @@ includes CPU time of children that have already exited.
 ```
 src/cpu_process_tree_monitor/
   __init__.py      public re-exports
-  monitor.py       CpuTreeMonitor (lifecycle, thread, callback dispatch)
+  monitor.py       CpuTreeMonitor (thread + schedule.Scheduler driver)
   sampler.py       PsutilTreeSampler (psutil-based, the only backend)
   samples.py       Sample / RootSample / ProcSample pydantic models
 
@@ -104,9 +104,6 @@ and top processes including `afl-fuzz` and `target`. AFL discovers the
   / `docker run` and reading runner logs. Do not add a `tests/`
   directory, do not add `pytest` to dependencies, and do not
   reintroduce `[tool.pytest.ini_options]` to `pyproject.toml`.
-- v1 is Linux-only on purpose (`/proc`, `os.sched_getaffinity`).
-- `Sample.schema_version` exists so the OTel adapter can branch on
-  schema if/when fields are added; bump it if the dataclass shape
-  changes.
+- v1 is Linux-only on purpose (`psutil` reads `/proc`).
 - Public surface = what's re-exported from
   `src/cpu_process_tree_monitor/__init__.py`. Everything else is internal.

@@ -44,9 +44,9 @@ with CpuTreeMonitor(
 
 ## Sample schema
 
-`Sample.schema_version == 1`. See `src/cpu_process_tree_monitor/samples.py` for
-the pydantic model; `Sample.model_dump()` returns a plain dict suitable
-for use as OpenTelemetry attributes, and `Sample.model_dump_json()` /
+See `src/cpu_process_tree_monitor/samples.py` for the pydantic model;
+`Sample.model_dump()` returns a plain dict suitable for use as
+OpenTelemetry attributes, and `Sample.model_dump_json()` /
 `Sample.model_json_schema()` are also available.
 
 ## Demo (Docker)

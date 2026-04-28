@@ -91,7 +91,6 @@ def main() -> int:
         on_sample=emit_to_otel,
         interval_s=args.interval,
         top_n=args.top_n,
-        stop_when_all_roots_exit=True,
     )
 
     stop_event = threading.Event()
