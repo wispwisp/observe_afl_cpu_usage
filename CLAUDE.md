@@ -1,4 +1,4 @@
-# cpu-process-tree-monitor — project memory for future Claude sessions
+# process-tree-monitor — project memory for future Claude sessions
 
 ## What this project is
 
@@ -49,8 +49,8 @@ don't sample. Rare in AFL. A future cgroup v2 backend would close this.
 ## How to run the demo
 
 ```
-docker build -t cpu-process-tree-monitor-demo -f docker_demo/Dockerfile .
-docker run --rm -it cpu-process-tree-monitor-demo
+docker build -t process-tree-monitor-demo -f docker_demo/Dockerfile .
+docker run --rm -it process-tree-monitor-demo
 ```
 
 Expect log lines from `emit_to_otel` with non-zero aggregate CPU and top
@@ -67,4 +67,4 @@ processes including `afl-fuzz` and `target`; AFL crashes within seconds.
   run `pip install`, `docker build`, `docker run`, or other long-running
   commands unless asked.
 - Public surface = the re-exports in
-  `src/cpu_process_tree_monitor/__init__.py`. Everything else is internal.
+  `src/process_tree_monitor/__init__.py`. Everything else is internal.

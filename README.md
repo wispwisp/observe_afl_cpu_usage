@@ -1,7 +1,7 @@
-# cpu-process-tree-monitor
+# process-tree-monitor
 
-CPU usage monitor for a process tree given root PIDs. Originally built
-to watch AFL++ fuzzing trees, but works for any subprocess tree. Each
+CPU and memory usage monitor for a process tree given root PIDs. Originally
+built to watch AFL++ fuzzing trees, but works for any subprocess tree. Each
 tick the monitor produces one `Sample` and delivers it to a single
 `on_sample` callback.
 
@@ -18,7 +18,7 @@ Requires Python 3.10+, Linux (uses `/proc` via `psutil`), and `psutil`.
 ```python
 import logging
 import subprocess
-from cpu_process_tree_monitor import CpuTreeMonitor, Sample
+from process_tree_monitor import ProcessTreeMonitor, Sample
 
 def emit_to_otel(sample: Sample) -> None:
     # Replace with a real OpenTelemetry meter / exporter in production.
@@ -35,7 +35,7 @@ afl = subprocess.Popen(
     start_new_session=True,
 )
 
-with CpuTreeMonitor(
+with ProcessTreeMonitor(
     root_pids=[afl.pid],
     on_sample=emit_to_otel,
     interval_s=1.0,
@@ -48,7 +48,7 @@ with CpuTreeMonitor(
 
 ## Sample schema
 
-See `src/cpu_process_tree_monitor/samples.py` for the pydantic model;
+See `src/process_tree_monitor/samples.py` for the pydantic model;
 `Sample.model_dump()` returns a plain dict suitable for use as
 OpenTelemetry attributes, and `Sample.model_dump_json()` /
 `Sample.model_json_schema()` are also available.
@@ -56,8 +56,8 @@ OpenTelemetry attributes, and `Sample.model_dump_json()` /
 ## Demo (Docker)
 
 ```
-docker build -t cpu-process-tree-monitor-demo -f docker_demo/Dockerfile .
-docker run --rm -it -v cpu-process-tree-monitor-demo
+docker build -t process-tree-monitor-demo -f docker_demo/Dockerfile .
+docker run --rm -it process-tree-monitor-demo
 ```
 
 Inside the container `runner.py` launches AFL++ against a crashing
@@ -79,4 +79,4 @@ children is still alive, that child is reparented to init and its CPU
 goes to init's `children_*` (which we don't sample). A cgroup v2 backend
 that captures cumulative CPU regardless of process lifecycle is on the
 roadmap; the sampler interface is kept clean so it slots in behind the
-same `CpuTreeMonitor` API.
+same `ProcessTreeMonitor` API.

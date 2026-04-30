@@ -1,4 +1,4 @@
-"""CpuTreeMonitor: a daemon thread that ticks a PsutilTreeSampler via
+"""ProcessTreeMonitor: a daemon thread that ticks a PsutilTreeSampler via
 schedule.Scheduler and dispatches each Sample to a single callback.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 SampleCallback = Callable[[Sample], None]
 
 
-class CpuTreeMonitor:
+class ProcessTreeMonitor:
     def __init__(
         self,
         root_pids: int | Iterable[int],
@@ -43,7 +43,7 @@ class CpuTreeMonitor:
         self._thread = threading.Thread(
             target=self._run_loop,
             args=(sched,),
-            name="cpu-process-tree-monitor",
+            name="process-tree-monitor",
             daemon=True,
         )
         self._thread.start()
@@ -55,7 +55,7 @@ class CpuTreeMonitor:
             t.join(timeout=timeout)
         self._thread = None
 
-    def __enter__(self) -> "CpuTreeMonitor":
+    def __enter__(self) -> "ProcessTreeMonitor":
         self.start()
         return self
 

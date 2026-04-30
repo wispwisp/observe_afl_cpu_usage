@@ -1,5 +1,5 @@
-"""cpu-process-tree-monitor — CPU usage monitor for a process tree given root PIDs."""
-from .monitor import CpuTreeMonitor, SampleCallback
+"""process-tree-monitor — CPU and memory usage monitor for a process tree given root PIDs."""
+from .monitor import ProcessTreeMonitor, SampleCallback
 from .sampler import PsutilTreeSampler
 from .samples import CpuTimes, ProcSample, RootSample, Sample
 
@@ -7,7 +7,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "__version__",
-    "CpuTreeMonitor",
+    "ProcessTreeMonitor",
     "PsutilTreeSampler",
     "CpuTimes",
     "ProcSample",

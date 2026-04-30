@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from cpu_process_tree_monitor import CpuTreeMonitor, Sample
+from process_tree_monitor import ProcessTreeMonitor, Sample
 
 
 def emit_to_otel(sample: Sample) -> None:
@@ -91,7 +91,7 @@ def main() -> int:
     )
     log.info("afl pid=%d", afl.pid)
 
-    monitor = CpuTreeMonitor(
+    monitor = ProcessTreeMonitor(
         root_pids=[afl.pid],
         on_sample=emit_to_otel,
         interval_s=args.interval,
