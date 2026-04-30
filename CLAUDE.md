@@ -80,7 +80,7 @@ aggregates and top processes (by CPU and by memory) including
 
 ## Conventions
 
-- Python 3.9, type hints throughout. Linux-only on purpose (`psutil`
+- Python 3.10+, type hints throughout. Linux-only on purpose (`psutil`
   reads `/proc`).
 - **No automated test suite.** No `tests/` directory, no `pytest` in
   dependencies, no `[tool.pytest.ini_options]`. Verification = `docker

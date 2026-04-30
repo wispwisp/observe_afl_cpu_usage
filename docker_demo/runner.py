@@ -1,5 +1,5 @@
 """End-to-end smoke test: launch AFL++ against /opt/app/target/target,
-attach the CPU tree monitor to AFL's PID, and stream each Sample to a
+attach the process tree monitor to AFL's PID, and stream each Sample to a
 stand-in OpenTelemetry exporter (here: a logger).
 """
 from __future__ import annotations
