@@ -6,7 +6,7 @@ from typing import Iterable
 
 import psutil
 
-from .samples import CpuTimes, ProcSample, RootSample, Sample
+from .samples import CpuTimes, MemoryInfo, ProcSample, RootSample, Sample
 
 
 class PsutilTreeSampler:
@@ -76,14 +76,15 @@ def _discover_tree(
 
 
 def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
-    """Read cumulative CPU times and comm for each PID.
+    """Read cumulative CPU times, comm, and memory info for each PID.
 
     cpu_times() returns absolute cumulative seconds since process
     start; the first call on a fresh psutil.Process is correct
-    without priming (unlike cpu_percent, which needed priming).
-    PIDs that vanish between _discover_tree and this read (race with
-    process exit) are silently dropped. comm is truncated to 15
-    chars to match the /proc/<pid>/comm kernel limit.
+    without priming. memory_info() returns instantaneous RSS/VMS/
+    shared (a gauge, not a counter) — there is no equivalent of
+    cpu_times.children_*, so memory of a process that exits between
+    ticks is gone. PIDs that vanish mid-read are silently dropped.
+    comm is truncated to 15 chars to match /proc/<pid>/comm.
     """
     proc_samples: dict[int, ProcSample] = {}
     for pid in pids:
@@ -91,6 +92,7 @@ def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
             proc = psutil.Process(pid)
             t = proc.cpu_times()
             name = proc.name()
+            mem = proc.memory_info()
         except psutil.Error:
             continue
         proc_samples[pid] = ProcSample(
@@ -101,6 +103,11 @@ def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
                 system_seconds=t.system,
                 children_user_seconds=t.children_user,
                 children_system_seconds=t.children_system,
+            ),
+            memory=MemoryInfo(
+                rss_bytes=mem.rss,
+                vms_bytes=mem.vms,
+                shared_bytes=mem.shared,
             ),
         )
     return proc_samples
