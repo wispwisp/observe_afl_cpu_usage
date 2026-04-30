@@ -33,25 +33,7 @@ class PsutilTreeSampler:
         # timestamp regardless of how long the per-PID work below takes.
         wall_now = time.time()
 
-        # Phase 1 - tree discovery. psutil performs the /proc walk.
-        # A root that is dead/gone/inaccessible contributes an empty
-        # descendant list; its RootSample later reports root_alive=False.
-        per_root_descendants: dict[int, list[int]] = {}
-        all_pids: set[int] = set()
-        for root_pid in self._root_pids:
-            desc: list[int] = []
-            try:
-                proc = psutil.Process(root_pid)
-                # children(recursive=True) walks the tree at call time;
-                # short-lived grandchildren that fork and exit between
-                # samples will be missed here, but their CPU is still
-                # captured via their (still-alive) parent's children_*.
-                desc = [d.pid for d in proc.children(recursive=True)]
-            except psutil.Error:
-                pass
-            per_root_descendants[root_pid] = desc
-            all_pids.add(root_pid)
-            all_pids.update(desc)
+        per_root_descendants, all_pids = _discover_tree(self._root_pids)
 
         # Phase 2 - per-PID cpu_times read. cpu_times() returns absolute
         # cumulative seconds since process start; first call on a fresh
@@ -124,6 +106,34 @@ class PsutilTreeSampler:
             aggregate=overall,
             top_processes=top,
         )
+
+
+def _discover_tree(
+    root_pids: list[int],
+) -> tuple[dict[int, list[int]], set[int]]:
+    """Walk each root's descendant tree via psutil.
+
+    A dead/gone/inaccessible root contributes an empty descendant
+    list; its root_pid is still added to all_pids so
+    _read_proc_samples will attempt it and _aggregate_per_root can
+    later report root_alive=False. children(recursive=True) walks
+    the tree at call time, so short-lived grandchildren born and
+    reaped between ticks are missed here, but their CPU is still
+    captured via their (still-alive) parent's children_*.
+    """
+    per_root_descendants: dict[int, list[int]] = {}
+    all_pids: set[int] = set()
+    for root_pid in root_pids:
+        desc: list[int] = []
+        try:
+            proc = psutil.Process(root_pid)
+            desc = [d.pid for d in proc.children(recursive=True)]
+        except psutil.Error:
+            pass
+        per_root_descendants[root_pid] = desc
+        all_pids.add(root_pid)
+        all_pids.update(desc)
+    return per_root_descendants, all_pids
 
 
 def _sum_cpu_times(items: Iterable[CpuTimes]) -> CpuTimes:
