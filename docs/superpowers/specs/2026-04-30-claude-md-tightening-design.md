@@ -6,8 +6,9 @@ Reduce the size of `CLAUDE.md` while preserving the load-bearing
 context that prevents future Claude sessions from re-litigating
 already-settled design decisions.
 
-Target: ~50 lines (down from 122), roughly 2.3 KB vs 5.4 KB —
-about 57% smaller.
+Target: ~70 lines (down from 122), about 43% smaller. (The original
+draft estimated ~50 lines but underweighted line-wrap at the project's
+~70-character wrap convention.)
 
 ## Scope
 
@@ -132,7 +133,7 @@ processes including `afl-fuzz` and `target`; AFL crashes within seconds.
 
 ## Acceptance criteria
 
-- The new `CLAUDE.md` is ≤ 60 lines.
+- The new `CLAUDE.md` is ≤ 70 lines.
 - Every load-bearing guardrail from the original is present in the new
   version (verifiable by reading both files side-by-side).
 - The two already-staged tweaks are preserved verbatim.
