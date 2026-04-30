@@ -29,21 +29,23 @@ class PsutilTreeSampler:
         self._root_pids: list[int] = deduped
 
     def sample(self, *, interval_s: float, top_n: int) -> Sample:
-        # Capture wall time once so every PID in this Sample shares one
-        # timestamp regardless of how long the per-PID work below takes.
         wall_now = time.time()
         per_root_descendants, all_pids = _discover_tree(self._root_pids)
         proc_samples = _read_proc_samples(all_pids)
-        roots = _aggregate_per_root(per_root_descendants, proc_samples)
-        overall = _aggregate_overall(proc_samples)
+        roots = _aggregate_per_root(per_root_descendants, proc_samples, full_memory_info=False)
+        cpu_overall, mem_overall, full_info_count = _aggregate_overall(
+            proc_samples, full_memory_info=False,
+        )
         top = _select_top_processes(proc_samples, top_n)
         return Sample(
             timestamp_unix=wall_now,
             interval_s=interval_s,
             roots=roots,
             process_count=len(proc_samples),
-            aggregate=overall,
+            aggregate=cpu_overall,
             top_processes=top,
+            memory_aggregate=mem_overall,
+            memory_full_info_pid_count=full_info_count,
         )
 
 
@@ -116,39 +118,62 @@ def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
 def _aggregate_per_root(
     per_root_descendants: dict[int, list[int]],
     proc_samples: dict[int, ProcSample],
+    full_memory_info: bool,
 ) -> tuple[RootSample, ...]:
     """Build one RootSample per root.
 
-    For each root, sum CpuTimes over (root + descendants) PIDs that
-    produced a sample. A zombie/already-reaped root yields
-    root_alive=False but its surviving descendants still contribute
-    to its aggregate, so the caller can see leftover work in the
-    tree even after the root itself exits.
+    For each root, sum CpuTimes and MemoryInfo over (root +
+    descendants) PIDs that produced a sample. A zombie/already-reaped
+    root yields root_alive=False but its surviving descendants still
+    contribute to its aggregates. memory_full_info_pid_count is None
+    when full_memory_info is off; otherwise it counts root+descendant
+    PIDs whose memory.pss_bytes is not None.
     """
-    return tuple(
-        RootSample(
+    out: list[RootSample] = []
+    for root_pid, desc in per_root_descendants.items():
+        contributing = [
+            proc_samples[p] for p in (root_pid, *desc) if p in proc_samples
+        ]
+        cpu_agg = _sum_cpu_times(p.cpu_times for p in contributing)
+        mem_agg = _sum_memory_info(p.memory for p in contributing)
+        full_count: int | None
+        if full_memory_info:
+            full_count = sum(1 for p in contributing if p.memory.pss_bytes is not None)
+        else:
+            full_count = None
+        out.append(RootSample(
             root_pid=root_pid,
             root_alive=root_pid in proc_samples,
             descendant_count=len(desc),
-            aggregate=_sum_cpu_times(
-                proc_samples[p].cpu_times
-                for p in (root_pid, *desc)
-                if p in proc_samples
-            ),
-        )
-        for root_pid, desc in per_root_descendants.items()
-    )
+            aggregate=cpu_agg,
+            memory_aggregate=mem_agg,
+            memory_full_info_pid_count=full_count,
+        ))
+    return tuple(out)
 
 
-def _aggregate_overall(proc_samples: dict[int, ProcSample]) -> CpuTimes:
-    """Sum CpuTimes across all sampled PIDs.
+def _aggregate_overall(
+    proc_samples: dict[int, ProcSample],
+    full_memory_info: bool,
+) -> tuple[CpuTimes, MemoryInfo, int | None]:
+    """Sum CpuTimes and MemoryInfo across all sampled PIDs.
 
     Auto-deduped by pid via the dict keys: a descendant shared
-    between two roots is counted once. This is the cross-tree
-    aggregate, distinct from the per-root sub-aggregates produced
-    by _aggregate_per_root.
+    between two roots is counted once. Returns (cpu_agg, mem_agg,
+    full_info_pid_count). full_info_pid_count is None when
+    full_memory_info is off; otherwise it counts PIDs whose
+    memory.pss_bytes is not None.
     """
-    return _sum_cpu_times(p.cpu_times for p in proc_samples.values())
+    cpu_agg = _sum_cpu_times(p.cpu_times for p in proc_samples.values())
+    mem_agg = _sum_memory_info(p.memory for p in proc_samples.values())
+    full_count: int | None
+    if full_memory_info:
+        full_count = sum(
+            1 for p in proc_samples.values() if p.memory.pss_bytes is not None
+        )
+    else:
+        full_count = None
+    return cpu_agg, mem_agg, full_count
 
 
 def _select_top_processes(
@@ -171,6 +196,52 @@ def _select_top_processes(
         ),
         reverse=True,
     )[:top_n])
+
+
+def _sum_memory_info(items: Iterable[MemoryInfo]) -> MemoryInfo:
+    """Sum MemoryInfo field-by-field.
+
+    rss/vms/shared are always summed (which double-counts shared
+    pages — this is a known property of RSS-summing and is why PSS
+    exists as the opt-in correct alternative). uss/pss/swap are
+    summed only when *every* contributing item has a non-None value;
+    if any item is None, the aggregate for that field is None. This
+    lets the caller distinguish "true tree PSS" from a partially-
+    covered tree where AccessDenied forced fallbacks.
+    """
+    rss = vms = shared = 0
+    uss = pss = swap = 0
+    have_uss = have_pss = have_swap = True
+    saw_any = False
+    for m in items:
+        saw_any = True
+        rss += m.rss_bytes
+        vms += m.vms_bytes
+        shared += m.shared_bytes
+        if m.uss_bytes is None:
+            have_uss = False
+        else:
+            uss += m.uss_bytes
+        if m.pss_bytes is None:
+            have_pss = False
+        else:
+            pss += m.pss_bytes
+        if m.swap_bytes is None:
+            have_swap = False
+        else:
+            swap += m.swap_bytes
+    # An empty input means we have no information at all — propagate
+    # None for the optional fields rather than reporting zero coverage.
+    if not saw_any:
+        have_uss = have_pss = have_swap = False
+    return MemoryInfo(
+        rss_bytes=rss,
+        vms_bytes=vms,
+        shared_bytes=shared,
+        uss_bytes=uss if have_uss else None,
+        pss_bytes=pss if have_pss else None,
+        swap_bytes=swap if have_swap else None,
+    )
 
 
 def _sum_cpu_times(items: Iterable[CpuTimes]) -> CpuTimes:
