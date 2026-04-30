@@ -35,31 +35,7 @@ class PsutilTreeSampler:
 
         per_root_descendants, all_pids = _discover_tree(self._root_pids)
 
-        # Phase 2 - per-PID cpu_times read. cpu_times() returns absolute
-        # cumulative seconds since process start; first call on a fresh
-        # psutil.Process is just as valid as later calls (unlike
-        # cpu_percent, which needed priming). PIDs that vanish between
-        # Phase 1 and this read (race with process exit) are silently
-        # dropped. comm is truncated to 15 chars to match the
-        # /proc/<pid>/comm kernel limit.
-        proc_samples: dict[int, ProcSample] = {}
-        for pid in all_pids:
-            try:
-                proc = psutil.Process(pid)
-                t = proc.cpu_times()
-                name = proc.name()
-            except psutil.Error:
-                continue
-            proc_samples[pid] = ProcSample(
-                pid=pid,
-                comm=name[:15],
-                cpu_times=CpuTimes(
-                    user_seconds=t.user,
-                    system_seconds=t.system,
-                    children_user_seconds=t.children_user,
-                    children_system_seconds=t.children_system,
-                ),
-            )
+        proc_samples = _read_proc_samples(all_pids)
 
         # Phase 3 - per-root sub-aggregates. For each root, sum CpuTimes
         # over (root + descendants) PIDs that produced a sample. A
@@ -134,6 +110,37 @@ def _discover_tree(
         all_pids.add(root_pid)
         all_pids.update(desc)
     return per_root_descendants, all_pids
+
+
+def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
+    """Read cumulative CPU times and comm for each PID.
+
+    cpu_times() returns absolute cumulative seconds since process
+    start; the first call on a fresh psutil.Process is correct
+    without priming (unlike cpu_percent, which needed priming).
+    PIDs that vanish between _discover_tree and this read (race with
+    process exit) are silently dropped. comm is truncated to 15
+    chars to match the /proc/<pid>/comm kernel limit.
+    """
+    proc_samples: dict[int, ProcSample] = {}
+    for pid in pids:
+        try:
+            proc = psutil.Process(pid)
+            t = proc.cpu_times()
+            name = proc.name()
+        except psutil.Error:
+            continue
+        proc_samples[pid] = ProcSample(
+            pid=pid,
+            comm=name[:15],
+            cpu_times=CpuTimes(
+                user_seconds=t.user,
+                system_seconds=t.system,
+                children_user_seconds=t.children_user,
+                children_system_seconds=t.children_system,
+            ),
+        )
+    return proc_samples
 
 
 def _sum_cpu_times(items: Iterable[CpuTimes]) -> CpuTimes:
