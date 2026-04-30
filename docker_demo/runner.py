@@ -20,28 +20,47 @@ from process_tree_monitor import ProcessTreeMonitor, Sample
 def emit_to_otel(sample: Sample) -> None:
     """Stand-in for an OpenTelemetry exporter call.
 
-    In production this is where you'd record observable counters on a
-    `metrics.Meter` (one per cpu_times field) and let the configured
-    OTLP exporter push them. For the smoke test we just log a compact
-    summary so `docker run` output shows samples flowing.
+    In production this is where you'd record observable counters/gauges on
+    a `metrics.Meter` (counters for cpu_times fields, gauges for memory
+    fields) and let the configured OTLP exporter push them. For the smoke
+    test we just log a compact summary so `docker run` output shows
+    samples flowing.
     """
     log = logging.getLogger("otel")
-    agg = sample.aggregate
-    top = ", ".join(
+    cpu = sample.aggregate
+    mem = sample.memory_aggregate
+    top_cpu = ", ".join(
         f"{p.comm}({p.pid})="
         f"u={p.cpu_times.user_seconds:.1f}s,"
         f"s={p.cpu_times.system_seconds:.1f}s"
-        for p in sample.top_processes[:3]
+        for p in sample.top_processes_by_cpu[:3]
+    )
+    top_mem = ", ".join(
+        f"{p.comm}({p.pid})="
+        f"rss={p.memory.rss_bytes // 1024}K"
+        + (f",pss={p.memory.pss_bytes // 1024}K" if p.memory.pss_bytes is not None else "")
+        for p in sample.top_processes_by_memory[:3]
+    )
+    pss_str = (
+        f"{mem.pss_bytes // 1024}K"
+        if mem.pss_bytes is not None else "n/a"
     )
     log.info(
-        "[otel] u=%.1fs s=%.1fs cu=%.1fs cs=%.1fs procs=%d roots=%d top=[%s]",
-        agg.user_seconds,
-        agg.system_seconds,
-        agg.children_user_seconds,
-        agg.children_system_seconds,
+        "[otel] cpu u=%.1fs s=%.1fs cu=%.1fs cs=%.1fs | "
+        "mem rss=%dK vms=%dK pss=%s pid_count=%s | procs=%d roots=%d "
+        "top_cpu=[%s] top_mem=[%s]",
+        cpu.user_seconds,
+        cpu.system_seconds,
+        cpu.children_user_seconds,
+        cpu.children_system_seconds,
+        mem.rss_bytes // 1024,
+        mem.vms_bytes // 1024,
+        pss_str,
+        sample.memory_full_info_pid_count,
         sample.process_count,
         len(sample.roots),
-        top,
+        top_cpu,
+        top_mem,
     )
 
 
@@ -57,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         default=120,
         type=int,
         help="seconds before the runner terminates AFL itself",
+    )
+    p.add_argument(
+        "--full-memory-info",
+        action="store_true",
+        help="enable USS/PSS/swap reads via memory_full_info() (slower)",
     )
     return p.parse_args()
 
@@ -96,6 +120,7 @@ def main() -> int:
         on_sample=emit_to_otel,
         interval_s=args.interval,
         top_n=args.top_n,
+        full_memory_info=args.full_memory_info,
     )
 
     stop_event = threading.Event()
