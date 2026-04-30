@@ -27,10 +27,14 @@ logic, no drift-corrected scheduling, no schema_version).
 ## Design choices (frozen)
 
 - **Sampling backend**: `psutil` only. Each tick calls
-  `psutil.Process(root).children(recursive=True)` per root and reuses
-  the per-PID `psutil.Process` cache that the sampler already needs for
-  `cpu_percent(interval=None)` deltas. There is no hand-rolled
-  `/proc` walker — `psutil` does that internally.
+  `psutil.Process(root).children(recursive=True)` per root, then reads
+  `psutil.Process.cpu_times()` for every PID in the union — that returns
+  cumulative seconds since process start (`user`, `system`,
+  `children_user`, `children_system`), which is the monotonic-counter
+  shape OTel wants. No per-PID `psutil.Process` cache is maintained:
+  `cpu_times()` is not delta-based, so a fresh `psutil.Process` per
+  tick is correct and simpler. There is no hand-rolled `/proc` walker —
+  `psutil` does that internally.
 - **No cgroup backend**. The runner script and AFL run "at the same
   level" — the script just receives a PID and walks the tree. The
   sampler interface is kept clean so a cgroup v2 backend can be added
@@ -53,19 +57,28 @@ logic, no drift-corrected scheduling, no schema_version).
   `interval_s`. `stop()` sets a `threading.Event` and joins the thread.
   No auto-stop on root exit — the runner watches its own subprocess
   and calls `monitor.stop()`. Restart after `stop()` is supported.
-- **No PID-reuse defense and no explicit zombie check**. The cache is
-  keyed by pid, and a dead or zombie root just produces a zero
-  `RootSample`. Both checks were dropped in the simplification pass.
+- **No PID-reuse defense and no explicit zombie check**. A dead or
+  zombie root just yields a `RootSample` whose `aggregate` is whatever
+  live members of its tree contribute (zero if the root is gone with no
+  live descendants). Both checks were dropped in the simplification pass.
 
 ## Known limitation (documented, not a bug)
 
-psutil sampling cannot account for CPU consumed by child processes
-that are born **and** die between two ticks. AFL++ in non-persistent
-fork-server mode spawns extremely short-lived target binaries, so the
-reported aggregate may underestimate actual CPU. AFL persistent mode
-(`__AFL_LOOP`) keeps targets alive across executions and avoids this.
-A future cgroup v2 backend can close this gap because `cpu.stat`
-includes CPU time of children that have already exited.
+The born-and-die-between-ticks gap is largely closed by reading
+`cpu_times()`'s `children_user` / `children_system` on a still-alive
+parent: when the kernel reaps a child, the child's user+system (and
+the child's own `children_*`) is added to the parent's `children_*`.
+AFL's master and fork-server stay alive throughout a run, so
+target-binary CPU is captured via the fork-server even though no
+individual target is ever directly sampled.
+
+Remaining narrow gap: if an intermediate parent exits while one of
+its children is still alive, that child is reparented to init (leaves
+our tree) and its CPU eventually goes to init's `children_*`, which we
+don't sample. Rare in AFL — the master and fork-server stay alive
+throughout — but mentioned for completeness. A future cgroup v2
+backend can close this last gap because `cpu.stat` aggregates over the
+cgroup regardless of process lifecycle.
 
 ## File layout
 

@@ -22,8 +22,12 @@ from cpu_process_tree_monitor import CpuTreeMonitor, Sample
 
 def emit_to_otel(sample: Sample) -> None:
     # Replace with a real OpenTelemetry meter / exporter in production.
+    agg = sample.aggregate
     logging.getLogger("otel").info(
-        "agg=%.1f%% procs=%d", sample.aggregate_cpu_percent, sample.process_count,
+        "u=%.1fs s=%.1fs cu=%.1fs cs=%.1fs procs=%d",
+        agg.user_seconds, agg.system_seconds,
+        agg.children_user_seconds, agg.children_system_seconds,
+        sample.process_count,
     )
 
 afl = subprocess.Popen(
@@ -63,11 +67,16 @@ exporter call.
 
 ## Limitations
 
-psutil sampling cannot account for CPU consumed by child processes that
-are born **and** die between two ticks. AFL++ in non-persistent fork-server
-mode spawns extremely short-lived target processes, so the reported
-aggregate may underestimate actual CPU. Persistent mode (AFL's
-`AFL_LOOP_TIME` / `__AFL_LOOP`) avoids this. A cgroup v2 backend that
-captures cumulative CPU including dead children is on the roadmap; the
-sampler interface is kept clean so it slots in behind the same
-`CpuTreeMonitor` API.
+The born-and-die-between-ticks gap is largely closed by reading
+`cpu_times()`'s `children_user` / `children_system` on a still-alive
+parent: when the kernel reaps a child, its CPU is added to the parent's
+`children_*`. AFL's master and fork-server stay alive throughout a run,
+so target-binary CPU is captured via the fork-server even though no
+individual target is ever directly sampled.
+
+Remaining narrow gap: if an intermediate parent exits while one of its
+children is still alive, that child is reparented to init and its CPU
+goes to init's `children_*` (which we don't sample). A cgroup v2 backend
+that captures cumulative CPU regardless of process lifecycle is on the
+roadmap; the sampler interface is kept clean so it slots in behind the
+same `CpuTreeMonitor` API.

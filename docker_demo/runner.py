@@ -20,20 +20,25 @@ from cpu_process_tree_monitor import CpuTreeMonitor, Sample
 def emit_to_otel(sample: Sample) -> None:
     """Stand-in for an OpenTelemetry exporter call.
 
-    In production this is where you'd record gauges / observable counters
-    on a `metrics.Meter` and let the configured OTLP exporter push them.
-    For the smoke test we just log a compact summary so `docker run`
-    output shows samples flowing.
+    In production this is where you'd record observable counters on a
+    `metrics.Meter` (one per cpu_times field) and let the configured
+    OTLP exporter push them. For the smoke test we just log a compact
+    summary so `docker run` output shows samples flowing.
     """
     log = logging.getLogger("otel")
+    agg = sample.aggregate
     top = ", ".join(
-        f"{p.comm}({p.pid})={p.cpu_percent:.0f}%"
+        f"{p.comm}({p.pid})="
+        f"u={p.cpu_times.user_seconds:.1f}s,"
+        f"s={p.cpu_times.system_seconds:.1f}s"
         for p in sample.top_processes[:3]
     )
     log.info(
-        "[otel] agg=%.1f%% norm=%.1f%% procs=%d roots=%d top=[%s]",
-        sample.aggregate_cpu_percent,
-        sample.normalized_cpu_percent,
+        "[otel] u=%.1fs s=%.1fs cu=%.1fs cs=%.1fs procs=%d roots=%d top=[%s]",
+        agg.user_seconds,
+        agg.system_seconds,
+        agg.children_user_seconds,
+        agg.children_system_seconds,
         sample.process_count,
         len(sample.roots),
         top,
