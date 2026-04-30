@@ -36,16 +36,18 @@ class PsutilTreeSampler:
         cpu_overall, mem_overall, full_info_count = _aggregate_overall(
             proc_samples, full_memory_info=False,
         )
-        top = _select_top_processes(proc_samples, top_n)
+        top_cpu = _select_top_processes_by_cpu(proc_samples, top_n)
+        top_mem = _select_top_processes_by_memory(proc_samples, top_n, full_memory_info=False)
         return Sample(
             timestamp_unix=wall_now,
             interval_s=interval_s,
             roots=roots,
             process_count=len(proc_samples),
             aggregate=cpu_overall,
-            top_processes=top,
             memory_aggregate=mem_overall,
             memory_full_info_pid_count=full_info_count,
+            top_processes_by_cpu=top_cpu,
+            top_processes_by_memory=top_mem,
         )
 
 
@@ -176,15 +178,14 @@ def _aggregate_overall(
     return cpu_agg, mem_agg, full_count
 
 
-def _select_top_processes(
+def _select_top_processes_by_cpu(
     proc_samples: dict[int, ProcSample],
     top_n: int,
 ) -> tuple[ProcSample, ...]:
     """Return the top-N hottest ProcSamples by cumulative lifetime CPU.
 
     "Top by total cumulative" — the AFL master will usually
-    dominate because it's been running longest. This is not "top
-    by current rate".
+    dominate because it's been running longest. Not "top by current rate".
     """
     return tuple(sorted(
         proc_samples.values(),
@@ -196,6 +197,26 @@ def _select_top_processes(
         ),
         reverse=True,
     )[:top_n])
+
+
+def _select_top_processes_by_memory(
+    proc_samples: dict[int, ProcSample],
+    top_n: int,
+    full_memory_info: bool,
+) -> tuple[ProcSample, ...]:
+    """Return the top-N memory-heaviest ProcSamples.
+
+    Ranks by pss_bytes when full_memory_info=True (treating None as 0
+    so AccessDenied-fallback PIDs don't masquerade as zero-cost), else
+    by rss_bytes. Snapshot ranking — memory is a gauge, not cumulative.
+    """
+    if full_memory_info:
+        def key(p: ProcSample) -> int:
+            return p.memory.pss_bytes if p.memory.pss_bytes is not None else 0
+    else:
+        def key(p: ProcSample) -> int:
+            return p.memory.rss_bytes
+    return tuple(sorted(proc_samples.values(), key=key, reverse=True)[:top_n])
 
 
 def _sum_memory_info(items: Iterable[MemoryInfo]) -> MemoryInfo:
