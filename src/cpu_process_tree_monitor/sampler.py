@@ -39,23 +39,8 @@ class PsutilTreeSampler:
 
         roots = _aggregate_per_root(per_root_descendants, proc_samples)
 
-        # Phase 4 - cross-tree aggregate (deduped by pid via dict keys
-        # so a descendant shared between two roots is counted once) and
-        # top-N hottest by cumulative lifetime CPU. Note "top by total
-        # cumulative" differs from the old "top by current rate"; the
-        # AFL master will usually dominate the list because it's been
-        # running longest.
-        overall = _sum_cpu_times(p.cpu_times for p in proc_samples.values())
-        top = tuple(sorted(
-            proc_samples.values(),
-            key=lambda p: (
-                p.cpu_times.user_seconds
-                + p.cpu_times.system_seconds
-                + p.cpu_times.children_user_seconds
-                + p.cpu_times.children_system_seconds
-            ),
-            reverse=True,
-        )[:top_n])
+        overall = _aggregate_overall(proc_samples)
+        top = _select_top_processes(proc_samples, top_n)
 
         return Sample(
             timestamp_unix=wall_now,
@@ -151,6 +136,39 @@ def _aggregate_per_root(
         )
         for root_pid, desc in per_root_descendants.items()
     )
+
+
+def _aggregate_overall(proc_samples: dict[int, ProcSample]) -> CpuTimes:
+    """Sum CpuTimes across all sampled PIDs.
+
+    Auto-deduped by pid via the dict keys: a descendant shared
+    between two roots is counted once. This is the cross-tree
+    aggregate, distinct from the per-root sub-aggregates produced
+    by _aggregate_per_root.
+    """
+    return _sum_cpu_times(p.cpu_times for p in proc_samples.values())
+
+
+def _select_top_processes(
+    proc_samples: dict[int, ProcSample],
+    top_n: int,
+) -> tuple[ProcSample, ...]:
+    """Return the top-N hottest ProcSamples by cumulative lifetime CPU.
+
+    "Top by total cumulative" — the AFL master will usually
+    dominate because it's been running longest. This is not "top
+    by current rate".
+    """
+    return tuple(sorted(
+        proc_samples.values(),
+        key=lambda p: (
+            p.cpu_times.user_seconds
+            + p.cpu_times.system_seconds
+            + p.cpu_times.children_user_seconds
+            + p.cpu_times.children_system_seconds
+        ),
+        reverse=True,
+    )[:top_n])
 
 
 def _sum_cpu_times(items: Iterable[CpuTimes]) -> CpuTimes:
