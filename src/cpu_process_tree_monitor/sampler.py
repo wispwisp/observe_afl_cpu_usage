@@ -32,16 +32,11 @@ class PsutilTreeSampler:
         # Capture wall time once so every PID in this Sample shares one
         # timestamp regardless of how long the per-PID work below takes.
         wall_now = time.time()
-
         per_root_descendants, all_pids = _discover_tree(self._root_pids)
-
         proc_samples = _read_proc_samples(all_pids)
-
         roots = _aggregate_per_root(per_root_descendants, proc_samples)
-
         overall = _aggregate_overall(proc_samples)
         top = _select_top_processes(proc_samples, top_n)
-
         return Sample(
             timestamp_unix=wall_now,
             interval_s=interval_s,
