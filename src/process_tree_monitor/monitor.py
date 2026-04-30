@@ -25,9 +25,10 @@ class ProcessTreeMonitor:
         *,
         interval_s: float = 1.0,
         top_n: int = 10,
+        full_memory_info: bool = False,
     ) -> None:
         roots = [root_pids] if isinstance(root_pids, int) else list(root_pids)
-        self._sampler = PsutilTreeSampler(roots)
+        self._sampler = PsutilTreeSampler(roots, full_memory_info=full_memory_info)
         self._on_sample = on_sample
         self._interval_s = max(0.1, float(interval_s))
         self._top_n = int(top_n)

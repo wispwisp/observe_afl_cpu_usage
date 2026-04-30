@@ -17,7 +17,12 @@ class PsutilTreeSampler:
     so a fresh psutil.Process per tick is correct and simpler.
     """
 
-    def __init__(self, root_pids: Iterable[int]) -> None:
+    def __init__(
+        self,
+        root_pids: Iterable[int],
+        *,
+        full_memory_info: bool = False,
+    ) -> None:
         # Coerce to int, dedupe while preserving insertion order (so
         # per-root output keeps the order the caller passed, which
         # matters for AFL -M/-S where the main fuzzer is conventionally
@@ -27,17 +32,22 @@ class PsutilTreeSampler:
         if not deduped:
             raise ValueError("root_pids must be non-empty")
         self._root_pids: list[int] = deduped
+        self._full_memory_info: bool = bool(full_memory_info)
 
     def sample(self, *, interval_s: float, top_n: int) -> Sample:
         wall_now = time.time()
         per_root_descendants, all_pids = _discover_tree(self._root_pids)
-        proc_samples = _read_proc_samples(all_pids)
-        roots = _aggregate_per_root(per_root_descendants, proc_samples, full_memory_info=False)
+        proc_samples = _read_proc_samples(all_pids, self._full_memory_info)
+        roots = _aggregate_per_root(
+            per_root_descendants, proc_samples, self._full_memory_info,
+        )
         cpu_overall, mem_overall, full_info_count = _aggregate_overall(
-            proc_samples, full_memory_info=False,
+            proc_samples, self._full_memory_info,
         )
         top_cpu = _select_top_processes_by_cpu(proc_samples, top_n)
-        top_mem = _select_top_processes_by_memory(proc_samples, top_n, full_memory_info=False)
+        top_mem = _select_top_processes_by_memory(
+            proc_samples, top_n, self._full_memory_info,
+        )
         return Sample(
             timestamp_unix=wall_now,
             interval_s=interval_s,
@@ -79,15 +89,20 @@ def _discover_tree(
     return per_root_descendants, all_pids
 
 
-def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
-    """Read cumulative CPU times, comm, and memory info for each PID.
+def _read_proc_samples(
+    pids: Iterable[int],
+    full_memory_info: bool,
+) -> dict[int, ProcSample]:
+    """Read CPU times, comm, and memory info for each PID.
 
-    cpu_times() returns absolute cumulative seconds since process
-    start; the first call on a fresh psutil.Process is correct
-    without priming. memory_info() returns instantaneous RSS/VMS/
-    shared (a gauge, not a counter) — there is no equivalent of
-    cpu_times.children_*, so memory of a process that exits between
-    ticks is gone. PIDs that vanish mid-read are silently dropped.
+    With full_memory_info=False, only the cheap memory_info() is read
+    per PID (RSS/VMS/shared). With full_memory_info=True, also
+    memory_full_info() is read for USS/PSS/swap; that call walks
+    /proc/<pid>/smaps and is ~5–10× more expensive. AccessDenied
+    on memory_full_info() falls back to memory_info() for that one
+    PID — uss/pss/swap come back as None for it. Other psutil.Error
+    on any read drops the PID from the sample entirely (matches CPU
+    behavior so enabling full_memory_info never loses CPU coverage).
     comm is truncated to 15 chars to match /proc/<pid>/comm.
     """
     proc_samples: dict[int, ProcSample] = {}
@@ -99,6 +114,21 @@ def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
             mem = proc.memory_info()
         except psutil.Error:
             continue
+
+        uss = pss = swap = None
+        if full_memory_info:
+            try:
+                full = proc.memory_full_info()
+                uss = full.uss
+                pss = full.pss
+                # On Linux psutil exposes swap on full_info; guard for safety.
+                swap = getattr(full, "swap", None)
+            except psutil.AccessDenied:
+                pass
+            except psutil.Error:
+                # NoSuchProcess/ZombieProcess between calls — drop the PID.
+                continue
+
         proc_samples[pid] = ProcSample(
             pid=pid,
             comm=name[:15],
@@ -112,6 +142,9 @@ def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
                 rss_bytes=mem.rss,
                 vms_bytes=mem.vms,
                 shared_bytes=mem.shared,
+                uss_bytes=uss,
+                pss_bytes=pss,
+                swap_bytes=swap,
             ),
         )
     return proc_samples
