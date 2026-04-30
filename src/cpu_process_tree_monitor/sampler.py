@@ -37,24 +37,7 @@ class PsutilTreeSampler:
 
         proc_samples = _read_proc_samples(all_pids)
 
-        # Phase 3 - per-root sub-aggregates. For each root, sum CpuTimes
-        # over (root + descendants) PIDs that produced a sample. A
-        # zombie/already-reaped root yields root_alive=False but its
-        # surviving descendants still contribute, so the caller can see
-        # leftover work in the tree even after the root itself exits.
-        roots = tuple(
-            RootSample(
-                root_pid=root_pid,
-                root_alive=root_pid in proc_samples,
-                descendant_count=len(desc),
-                aggregate=_sum_cpu_times(
-                    proc_samples[p].cpu_times
-                    for p in (root_pid, *desc)
-                    if p in proc_samples
-                ),
-            )
-            for root_pid, desc in per_root_descendants.items()
-        )
+        roots = _aggregate_per_root(per_root_descendants, proc_samples)
 
         # Phase 4 - cross-tree aggregate (deduped by pid via dict keys
         # so a descendant shared between two roots is counted once) and
@@ -141,6 +124,33 @@ def _read_proc_samples(pids: Iterable[int]) -> dict[int, ProcSample]:
             ),
         )
     return proc_samples
+
+
+def _aggregate_per_root(
+    per_root_descendants: dict[int, list[int]],
+    proc_samples: dict[int, ProcSample],
+) -> tuple[RootSample, ...]:
+    """Build one RootSample per root.
+
+    For each root, sum CpuTimes over (root + descendants) PIDs that
+    produced a sample. A zombie/already-reaped root yields
+    root_alive=False but its surviving descendants still contribute
+    to its aggregate, so the caller can see leftover work in the
+    tree even after the root itself exits.
+    """
+    return tuple(
+        RootSample(
+            root_pid=root_pid,
+            root_alive=root_pid in proc_samples,
+            descendant_count=len(desc),
+            aggregate=_sum_cpu_times(
+                proc_samples[p].cpu_times
+                for p in (root_pid, *desc)
+                if p in proc_samples
+            ),
+        )
+        for root_pid, desc in per_root_descendants.items()
+    )
 
 
 def _sum_cpu_times(items: Iterable[CpuTimes]) -> CpuTimes:
