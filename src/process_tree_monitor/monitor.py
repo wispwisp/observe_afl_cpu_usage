@@ -24,20 +24,21 @@ class ProcessTreeMonitor:
         on_sample: SampleCallback,
         *,
         interval_s: float = 1.0,
-        top_n: int = 10,
         full_memory_info: bool = False,
     ) -> None:
         roots = [root_pids] if isinstance(root_pids, int) else list(root_pids)
         self._sampler = PsutilTreeSampler(roots, full_memory_info=full_memory_info)
         self._on_sample = on_sample
         self._interval_s = max(0.1, float(interval_s))
-        self._top_n = int(top_n)
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        # Reset the sampler's rate-state so a restart begins with no
+        # baseline (first post-restart tick has cpu_percent / elapsed_s None).
+        self._sampler.reset()
         sched = schedule.Scheduler()
         sched.every(self._interval_s).seconds.do(self._tick)
         self._stop_event.clear()
@@ -73,9 +74,7 @@ class ProcessTreeMonitor:
 
     def _tick(self) -> None:
         try:
-            sample = self._sampler.sample(
-                interval_s=self._interval_s, top_n=self._top_n,
-            )
+            sample = self._sampler.sample(interval_s=self._interval_s)
             self._on_sample(sample)
         except Exception:
             log.exception("sampler/callback error; continuing")
