@@ -22,45 +22,53 @@ def emit_to_otel(sample: Sample) -> None:
 
     In production this is where you'd record observable counters/gauges on
     a `metrics.Meter` (counters for cpu_times fields, gauges for memory
-    fields) and let the configured OTLP exporter push them. For the smoke
-    test we just log a compact summary so `docker run` output shows
-    samples flowing.
+    fields and cpu_percent) and let the configured OTLP exporter push them.
+    cpu_percent is a gauge (cores-busy, like top); the cpu_times second
+    fields stay counters. cpu_percent / elapsed_s are None on the first
+    tick (no baseline). For the smoke test we just log a compact summary so
+    `docker run` output shows samples flowing.
     """
     log = logging.getLogger("otel")
     cpu = sample.aggregate
     mem = sample.memory_aggregate
-    top_cpu = ", ".join(
-        f"{p.comm}({p.pid})="
-        f"u={p.cpu_times.user_seconds:.1f}s,"
-        f"s={p.cpu_times.system_seconds:.1f}s"
-        for p in sample.top_processes_by_cpu[:3]
+    load_str = (
+        f"{sample.cpu_percent:.0f}%" if sample.cpu_percent is not None else "n/a"
     )
-    top_mem = ", ".join(
+    elapsed_str = (
+        f"{sample.elapsed_s:.2f}s" if sample.elapsed_s is not None else "n/a"
+    )
+    # Display-only: the library no longer ranks processes, so the consumer
+    # sorts the full list by recent load to show the hottest few.
+    hot = sorted(
+        sample.processes,
+        key=lambda p: p.cpu_percent if p.cpu_percent is not None else -1.0,
+        reverse=True,
+    )[:3]
+    top = ", ".join(
         f"{p.comm}({p.pid})="
-        f"rss={p.memory.rss_bytes // 1024}K"
-        + (f",pss={p.memory.pss_bytes // 1024}K" if p.memory.pss_bytes is not None else "")
-        for p in sample.top_processes_by_memory[:3]
+        + (f"{p.cpu_percent:.0f}%" if p.cpu_percent is not None else "n/a")
+        + f",rss={p.memory.rss_bytes // 1024}K"
+        for p in hot
     )
     pss_str = (
-        f"{mem.pss_bytes // 1024}K"
-        if mem.pss_bytes is not None else "n/a"
+        f"{mem.pss_bytes // 1024}K" if mem.pss_bytes is not None else "n/a"
     )
     log.info(
-        "[otel] cpu u=%.1fs s=%.1fs cu=%.1fs cs=%.1fs | "
-        "mem rss=%dK vms=%dK pss=%s pid_count=%s | procs=%d roots=%d "
-        "top_cpu=[%s] top_mem=[%s]",
+        "[otel] load=%s (u=%.1fs s=%.1fs cu=%.1fs cs=%.1fs) elapsed=%s | "
+        "mem rss=%dK vms=%dK pss=%s pid_count=%s | procs=%d roots=%d hot=[%s]",
+        load_str,
         cpu.user_seconds,
         cpu.system_seconds,
         cpu.children_user_seconds,
         cpu.children_system_seconds,
+        elapsed_str,
         mem.rss_bytes // 1024,
         mem.vms_bytes // 1024,
         pss_str,
         sample.memory_full_info_pid_count,
         sample.process_count,
         len(sample.roots),
-        top_cpu,
-        top_mem,
+        top,
     )
 
 
@@ -70,7 +78,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--target", default="/opt/app/target/target")
     p.add_argument("--seeds", default="/opt/app/seeds")
     p.add_argument("--interval", default=1.0, type=float)
-    p.add_argument("--top-n", default=10, type=int)
     p.add_argument(
         "--max-runtime",
         default=120,
@@ -119,7 +126,6 @@ def main() -> int:
         root_pids=[afl.pid],
         on_sample=emit_to_otel,
         interval_s=args.interval,
-        top_n=args.top_n,
         full_memory_info=args.full_memory_info,
     )
 
