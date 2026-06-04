@@ -22,11 +22,15 @@ from process_tree_monitor import ProcessTreeMonitor, Sample
 
 def emit_to_otel(sample: Sample) -> None:
     # Replace with a real OpenTelemetry meter / exporter in production.
+    # cpu_percent is a gauge (cores-busy, like top); the CpuTimes second
+    # fields stay counters. cpu_percent / elapsed_s are None on the first
+    # tick (no baseline to diff against).
     cpu = sample.aggregate
     mem = sample.memory_aggregate
+    load = "n/a" if sample.cpu_percent is None else f"{sample.cpu_percent:.0f}%"
     logging.getLogger("otel").info(
-        "cpu u=%.1fs s=%.1fs | mem rss=%dK vms=%dK pss=%s | procs=%d",
-        cpu.user_seconds, cpu.system_seconds,
+        "load=%s cpu u=%.1fs s=%.1fs | mem rss=%dK vms=%dK pss=%s | procs=%d",
+        load, cpu.user_seconds, cpu.system_seconds,
         mem.rss_bytes // 1024, mem.vms_bytes // 1024,
         mem.pss_bytes if mem.pss_bytes is not None else "n/a",
         sample.process_count,
@@ -41,7 +45,6 @@ with ProcessTreeMonitor(
     root_pids=[afl.pid],
     on_sample=emit_to_otel,
     interval_s=1.0,
-    top_n=10,
     full_memory_info=False,  # set True for USS/PSS/swap (slower)
 ) as monitor:
     afl.wait()
@@ -59,6 +62,29 @@ adds a reaped child's CPU to its parent's `children_user`/`children_system`.
 Memory (`MemoryInfo`) is a *gauge*: an instantaneous snapshot. There is no
 `children_*` equivalent for memory, so when a process exits its memory is
 gone — short-lived processes' peak memory is invisible at any sane tick rate.
+
+## Recent CPU load (`cpu_percent`)
+
+Each `Sample` carries a recent CPU-load percentage at three levels —
+`Sample.cpu_percent` (whole tree), `RootSample.cpu_percent` (per root),
+and `ProcSample.cpu_percent` (per process). It is **cores-busy**, like
+`top`: `delta_cpu_seconds / elapsed_s × 100`, where the per-PID delta uses
+`user + system + children_user + children_system`. One fully-used core
+reads ~100; a multithreaded process or a tree aggregate can exceed 100.
+
+`Sample.elapsed_s` is the **measured** wall interval used as the
+denominator (distinct from the nominal `interval_s`), so any percentage is
+auditable. All of these are `None` until a baseline exists: the first tick,
+the first tick after a `stop()`/`start()` restart, a newly-appeared PID, or
+a PID whose `create_time` no longer matches (reuse).
+
+Because per-PID totals include `children_*`, a long-lived process's load
+reflects short-lived children it reaps — for AFL the fork-server's
+`cpu_percent` reflects target-execution throughput even though no
+individual target is ever directly sampled. The trade-off: a child that
+lives long enough to be sampled across several ticks and is then reaped
+folds its accumulated CPU into the parent's `children_*` in one interval, a
+one-tick spike in that interval (rare for AFL; the integral stays correct).
 
 ## Memory fields and `full_memory_info`
 
@@ -84,10 +110,11 @@ PID had `pss_bytes=None` — partial coverage is honest. Use
 See `src/process_tree_monitor/samples.py` for the pydantic models;
 `Sample.model_dump()` returns a plain dict suitable for use as
 OpenTelemetry attributes, and `Sample.model_dump_json()` /
-`Sample.model_json_schema()` are also available. Top-N processes are
-exposed as two ranked tuples: `top_processes_by_cpu` (cumulative CPU)
-and `top_processes_by_memory` (PSS when `full_memory_info=True`, else
-RSS).
+`Sample.model_json_schema()` are also available. Every sampled process is
+exposed, unranked, as `Sample.processes` — a tuple of `ProcSample` in
+tree-discovery order (roots first), each carrying its `cpu_percent`,
+`cpu_times`, and `memory`. There is no top-N; sort `processes` yourself if
+you want the heaviest by any dimension.
 
 ## Demo (Docker)
 
@@ -121,6 +148,11 @@ that is born and exits between ticks contributes nothing to any sample.
 Short-lived processes' peak memory is invisible. Tree aggregates of
 `rss_bytes` double-count shared pages; `pss_bytes` (opt-in) is the
 correct tree-summable metric.
+
+**Recent load:** `cpu_percent` and `elapsed_s` are `None` on the first
+tick and immediately after a restart. The `children_*`-inclusive total can
+produce a one-tick spike when a multi-tick-lived child is finally reaped
+(rare for AFL).
 
 A cgroup v2 backend that captures cumulative CPU and current/peak
 memory regardless of process lifecycle is on the roadmap; the sampler
