@@ -68,7 +68,9 @@ class Sample(_Frozen):
     memory_aggregate: MemoryInfo
     memory_full_info_pid_count: int | None
     # Global recent cores-busy CPU load (sum of per-PID cpu_percent). Can
-    # exceed 100. None until a baseline exists.
+    # exceed 100. None on the first tick / after restart, or when no PID has
+    # a baseline yet. Partial-coverage ticks (some PIDs newly appeared) sum
+    # over the contributing subset.
     cpu_percent: float | None
     # Every sampled process, unranked, in tree-discovery order (each root
     # immediately followed by its descendants). Replaces the former ranked
